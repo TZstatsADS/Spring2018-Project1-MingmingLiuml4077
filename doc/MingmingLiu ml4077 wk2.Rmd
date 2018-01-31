@@ -1,0 +1,437 @@
+---
+title: "ml4077"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+# Step 0
+Load all packages I 
+```{r}
+#packages.used=c("rvest", "tibble", "qdap", 
+#                "sentimentr", "gplots", "dplyr",
+#                "tm", "syuzhet"need., "factoextra", 
+#                "beeswarm", "scales", "RColorBrewer",
+#                "RANN", "tm", "topicmodels","tydytext","wordcloud")
+
+# check packages that need to be installed.
+#packages.needed=setdiff(packages.used, 
+#                        intersect(installed.packages()[,1], 
+#                                  packages.used))
+# install additional packages
+#if(length(packages.needed)>0){
+#  install.packages(packages.needed, dependencies = TRUE)
+#}
+
+# load packages
+library("rvest")
+library("tibble")
+library("qdap")
+library("sentimentr")
+library("gplots")
+library("dplyr")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("beeswarm")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("tm")
+library("topicmodels")
+library('stringr')
+library('wordcloud')
+library('SnowballC')
+library('text2vec')
+library('wordcloud')
+library('tidytext')
+library('ggplot2')
+library('scales') # visualisation
+library('grid') # visualisation
+library('gridExtra') # visualisation
+library('RColorBrewer') # visualisation
+library('corrplot') # visualisation
+library('alluvial') # visualisation
+
+source("../lib/plotstacked.R")
+source("../lib/speechFuncs.R")
+```
+This markdown was prepared with the following environmental settings.
+
+# Step 1
+I scraped the inaugaural speech part from the website and integrated them with the inauglist. Finally, I got the speech.list dataframe, which summaries the information of inaugural speeches for each president, inculding their sentences as well as the emotion of each sentence.
+```{r, message=FALSE, warning=FALSE}
+### Inauguaral speeches
+main.page <- read_html(x = "http://www.presidency.ucsb.edu/inaugurals.php")
+# Get link URLs
+# f.speechlinks is a function for extracting links from the list of speeches. 
+inaug=f.speechlinks(main.page)
+#head(inaug)
+#as.Date(inaug[,1],"%m %d, %y")
+inaug=inaug[-nrow(inaug),] # remove the last line, irrelevant due to error.
+
+inaug.list=read.csv("../data/inauglist.csv", stringsAsFactors = FALSE)
+speech.list=cbind(inaug.list, inaug)
+names(speech.list)[1] <- "President"
+```
+
+# Step 2 
+Cleaning the data and counting the number of words in each sentences. Finally, I created speech.list and sentence.list which record the president and speeches and sentences.
+```{r, message=FALSE, warning=FALSE}
+# Loop over each row in speech.list
+speech.list$fulltext=NA
+for(i in seq(nrow(speech.list))) {
+  text <- read_html(speech.list$urls[i]) %>% # load the page
+    html_nodes(".displaytext") %>% 
+    html_text() # get the text
+  speech.list$fulltext[i]=text
+  # Create the file name
+  filename <- paste0("../data/fulltext/", 
+                     speech.list$type[i],
+                     speech.list$File[i], "-", 
+                     speech.list$Term[i], ".txt")
+  sink(file = filename) %>% # open file to write 
+  cat(text)  # write the file
+  sink() # close the file
+}
+sentence.list=NULL
+for(i in 1:nrow(speech.list)){
+  sentences=sent_detect(speech.list$fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list=rbind(sentence.list, 
+                        cbind(speech.list[i,-ncol(speech.list)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+sentence.list=
+  sentence.list%>%
+  filter(!is.na(word.count)) 
+sentence.list$type="Inaug"
+```
+
+
+# Step 3 Analyzing how events affect the emotions of inaugural speeches
+According to chronicle of events, there are several big events, which are "America Funding", "Civil War", "World WarI", "World WarII", "Great Depression", "Economic Crisis". The presidents during these periods are "George Washington", ,"Abraham Lincoln","Woodrow Wilson", "Herbert Hoover", "Franklin D. Roosevelt","Barack Obama". And I will also add "Donald J Trump", the president now into analysis. In the following step, I will analyze how these events affect the inaugural speeches of these presidents. 
+
+It is not hard to see that presidents were in higher spirits at the beginning of each big event comparing to at the end. This is not hard to understand. At the beginning of each big events, the presidents must encourage their people and call on citizens to fight for their right and protect their nation. This is also why the emotions always go up at the end of inaugural speeches during the beginning periods.During the end of each big event, the emotions of speeches are more stable. It is pity that there is no inaugural speech at the beginning of Economic Crisis (2007) so I can find data to compare with Barack Obama's inaugural speech at the end of Economic Crisis(2009). So I compare this speech with his another speeches and find that speech at the end of Economic Crisis(2009) is still gentler than normal one. 
+
+It deserves to be mention that at the beginning emotion anger is higher than in the end, especially of the wars. 
+```{r}
+par(mfrow=c(4,1), mar=c(1,0,2,0), bty="n", xaxt="n", yaxt="n", font.main=1)
+speech.df=tbl_df(sentence.list)%>%filter(File=="GeorgeWashington", type=="Inaug",Term==1)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="George Washington(Funding), Inaugrual") 
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="GeorgeWashington", type=="Inaug",Term==2)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="George Washington(Normal), Inaugrual") 
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="AbrahamLincoln", type=="Inaug",Term==1)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Abraham Lincoln(The beginning of Civil War), Inaugrual")  
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="AbrahamLincoln", type=="Inaug",Term==2)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Abraham Lincoln(The end of Civil War), Inaugrual") 
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="WoodrowWilson", type=="Inaug",Term==1)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Woodrow Wilson (The beginning of World WarI), Inaugrual")#第一次世界大战
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="WoodrowWilson", type=="Inaug",Term==2)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Woodrow Wilson (The end of World WarI), Inaugrual") 
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="HerbertHoover", type=="Inaug",Term==1)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Herbert Hoover (The beginning of Great Depression), Inaugrual")
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="FranklinDRoosevelt", type=="Inaug",Term==1)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Franklin D. Roosevelt (The end of Great Depression), Inaugrual") 
+
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="FranklinDRoosevelt", type=="Inaug",Term==3)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Franklin D. Roosevelt (The beginning of World WarII), Inaugrual") 
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="FranklinDRoosevelt", type=="Inaug",Term==4)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Franklin D. Roosevelt (The end of World WarII), Inaugrual")
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="BarackObama", type=="Inaug",Term==1)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Barack Obama(The end of Economic Crisis), Inaugrual") 
+
+speech.df=tbl_df(sentence.list)%>%filter(File=="BarackObama", type=="Inaug",Term==2)%>%select(sent.id, anger:trust)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,2:9], 
+             xlab="Sentences", ylab="sentiment share", main="Barack Obama(Normal), Inaugrual") 
+```
+
+I  select data according to the presidents and their terms.
+```{r}
+sel.comparison.2 <- c("GeorgeWashington","AbrahamLincoln","WoodrowWilson","HerbertHoover","FranklinDRoosevelt","BarackObama")
+term.length = c(1:4)
+```
+
+Then I plot the heatmap and the comparing is more straightforward. It is not hard to see that, except  Great Depression, at the beginning of these events, the negative are more than at the end. For example, at the beginning of World War I, the feeling of disgust is more than at  the end of World War I. 
+
+I think the abnormal of Great Depression is due to different speech-style of different presidents(Franklin D. Roosevelt and Herbert Hoover).
+```{r,warning=FALSE,}
+sentiment.summary=sentence.list%>%filter(File%in%sel.comparison.2, Term==c(1:4))%>%
+              select(File,Term, positive:negative)%>%
+              group_by(File,Term)%>%
+              summarise_each(funs(mean))
+sentiment.summary= as.data.frame(sentiment.summary)
+rowname <- c("Beginning of Civil War","End of Civil War","End of Economic Crisis","Obama Normal","End of Great Depression", "Franklin Normal","Beginning of World WarII", "End of World WarII", "Founding of America", "Washington Normal","Beginning of Great Depression", "Beginning of World WarI","End of World WarI")
+rownames(sentiment.summary) = rowname
+
+heatmap.2(as.matrix(sentiment.summary[,c(-1,-2)]), 
+          scale = "column", key=F, 
+          col = bluered(100),
+          cexRow = 0.9, cexCol = 0.9, margins = c(8, 13),
+          trace = "none", density.info = "none")
+
+
+```
+
+
+
+# Step 4 Analyzing how events affect the topics of inaugural speeches
+Now, I will analyze how events affect the topics of inaugural speeches and I use lda model to ensure the topic in different speeches. 
+```{r,message=FALSE,warning=FALSE}
+inaug.speech = sentence.list%>%filter(File%in%sel.comparison.2, Term==c(1:4))%>%
+              select(File,Term, sentences)%>%
+              group_by(File,Term)
+corpus.list=sentence.list[2:(nrow(sentence.list)-1), ]
+sentence.pre=sentence.list$sentences[1:(nrow(sentence.list)-2)]
+sentence.post=sentence.list$sentences[3:(nrow(sentence.list)-1)]
+corpus.list$snipets=paste(sentence.pre, corpus.list$sentences, sentence.post, sep=" ")
+rm.rows=(1:nrow(corpus.list))[corpus.list$sent.id==1]
+rm.rows=c(rm.rows, rm.rows-1)
+corpus.list=corpus.list[-rm.rows, ]
+docs <- Corpus(VectorSource(corpus.list$snipets))
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+#remove potentially problematic symbols
+docs <-tm_map(docs,content_transformer(tolower))
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+#remove punctuation
+docs <- tm_map(docs, removePunctuation);
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+#Strip digits
+docs <- tm_map(docs, removeNumbers);
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+#remove stopwords
+docs <- tm_map(docs, removeWords, stopwords("english"));
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+#remove whitespace
+docs <- tm_map(docs, stripWhitespace);
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+#Stem document
+docs <- tm_map(docs,stemDocument)
+writeLines(as.character(docs[[sample(1:nrow(corpus.list), 1)]]));
+
+dtm <- DocumentTermMatrix(docs)
+#convert rownames to filenames#convert rownames to filenames
+rownames(dtm) <- paste(corpus.list$type, corpus.list$File,
+                       corpus.list$Term, corpus.list$sent.id, sep="_");
+
+rowTotals <- apply(dtm , 1, sum) #Find the sum of words in each Document
+
+dtm  <- dtm[rowTotals> 0, ]
+corpus.list=corpus.list[rowTotals>0, ]
+
+#Set parameters for Gibbs sampling
+burnin <- 4000
+iter <- 2000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+#Number of topics
+k <- 8
+
+#Run LDA using Gibbs sampling
+ldaOut <-LDA(dtm, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+#write out results
+#docs to topics
+ldaOut.topics <- as.matrix(topics(ldaOut));
+table(c(1:k, ldaOut.topics));
+write.csv(ldaOut.topics,file=paste("../out/LDAGibbs",k,"DocsToTopics.csv"));
+
+#top 6 terms in each topic
+ldaOut.terms <- as.matrix(terms(ldaOut,20));
+write.csv(ldaOut.terms,file=paste("../out/LDAGibbs",k,"TopicsToTerms.csv"));
+
+#probabilities associated with each topic assignment
+topicProbabilities <- as.data.frame(ldaOut@gamma);
+write.csv(topicProbabilities,file=paste("../out/LDAGibbs",k,"TopicProbabilities.csv"));
+
+terms.beta=ldaOut@beta
+terms.beta=scale(terms.beta)
+topics.terms=NULL
+for(i in 1:k){
+  topics.terms=rbind(topics.terms, ldaOut@terms[order(terms.beta[i,], decreasing = TRUE)[1:7]])
+}
+topics.terms;
+ldaOut.terms;
+
+topics.hash=c("Legislation","Belief","Economy","Unity","Military","Hope","Equality","America")
+corpus.list$ldatopic=as.vector(ldaOut.topics)
+corpus.list$ldahash=topics.hash[ldaOut.topics]
+
+colnames(topicProbabilities)=topics.hash
+corpus.list.df=cbind(corpus.list, topicProbabilities)
+```
+
+After deal with these speeches, I plot heatmap to see how these events affet their topic. Obviously, at the beginning of each event, these presidents are more likely to mention words like "Equality", "Unity", "Legislation" to encourage citizens to fight for their country. At the end of these events, the topics are more about "Military", "Economy" and "Hope". And I will specify in the following:
+
+For the Founding for America, the main topic is about "Belief" and "Legislation. It is not hard to understand because the president need his people to believe him and his country. And the most important thing for them to do at that time was to build a complete judicial system. And president Washington continued these topic to his second term, while he put more effort on giving people hope after the foundation. 
+
+For Civil War, World WarI and World WarII, at the beginning, these presidents emphasized the "Equality"" and "Unity" according to the political situation at that time. Then after the war, the topics of their inaugural speeches were all about military. And they also expressed stronger hope for the future comparing to before. 
+
+ For Great Depression, the  president paid more attention on "Economy" at the end period than at the beginning. Although there is no inaugural speech at the beginning of economic crisis, I could still compare speech at the end period with Obama's noraml speech. And it is not hard to see, Obama emphasized more on economy at the end of economic crisis than his normal period.
+ 
+In summary, the funding of America let Washington underlined his hope for "Belief" and "Legislation". The militray event would let president pay more attention on "Military" and "Hope" during inaugural speeches and economic events make presidents emphasize topic "Economy."
+```{r}
+par(mar=c(1,1,1,1))
+topic.summary=tbl_df(corpus.list.df)%>%
+              filter(type%in%c("Inaug"), File%in%sel.comparison.2,Term==c(1:4))%>%
+              select(File,Term, Legislation:America)%>%
+              group_by(File,Term)%>%
+              summarise_each(funs(mean))
+topic.summary=as.data.frame(topic.summary)
+rownames(topic.summary)=rowname
+heatmap.2(as.matrix(topic.summary[,c(1:8)+2]), 
+          scale = "column", key=F, 
+          col = bluered(100),
+          cexRow = 0.9, cexCol = 0.9, margins = c(8, 13),
+          trace = "none", density.info = "none")
+```
+
+#Step 5 Inspect an overall wordcloud
+I could use the wordcloud figure to see what words appear more. Here, I will take civil war and Great Depression as examples to analyze the change of topics.  
+
+At the beginning of civil war, the constitution and union and government appear more. 
+```{r, fig.height=6, fig.width=6}
+wcd1 <- sentence.list %>% filter(File %in% "AbrahamLincoln", Term == 1) %>% select(File, sentences) 
+wcd1$sentences <- as.character(wcd1$sentences)
+wcd1 <- wcd1 %>% unnest_tokens(word, sentences)
+wcd1 <- wcd1 %>%
+  anti_join(stop_words, by = "word")
+wcd1 %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 50, color = "red2"))
+```
+
+I could use the wordcloud figure to see what words appear more. At the end of civil war, the war appears a lot which means he emphasized more on military.
+```{r, fig.height=6, fig.width=6}
+wcd1 <- sentence.list %>% filter(File %in% "AbrahamLincoln", Term == 2) %>% select(File, sentences) 
+wcd1$sentences <- as.character(wcd1$sentences)
+wcd1 <- wcd1 %>% unnest_tokens(word, sentences)
+wcd1 <- wcd1 %>%
+  anti_join(stop_words, by = "word")
+wcd1 %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 50, color = "purple1"))
+```
+
+Comparing to the beginning and end of Great Depression, the money appears more at the end of Great Depression than the beginning.  
+```{r, fig.height=6, fig.width=6}
+wcd1 <- sentence.list %>% filter(File %in% "HerbertHoover", Term == 1) %>% select(File, sentences) 
+wcd1$sentences <- as.character(wcd1$sentences)
+wcd1 <- wcd1 %>% unnest_tokens(word, sentences)
+wcd1 <- wcd1 %>%
+  anti_join(stop_words, by = "word")
+wcd1 %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 50, color = "red2"))
+```
+
+```{r, fig.height=6, fig.width=6}
+wcd1 <- sentence.list %>% filter(File %in% "FranklinDRoosevelt", Term == 1) %>% select(File, sentences) 
+wcd1$sentences <- as.character(wcd1$sentences)
+wcd1 <- wcd1 %>% unnest_tokens(word, sentences)
+wcd1 <- wcd1 %>%
+  anti_join(stop_words, by = "word")
+wcd1 %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 50, color = "red2"))
+```
+So the conclusion is the same with the analysis I get before. Military-related words appear more at the end of war events and economy-related words appear more at the end of economy events.
+
+
+#Step 6 Calculating the relationship between emotions and topics.
+Finally, let me see the realtionship between topic and emotions. I calculate the correlation matrix and get the first three emotions for each topic. It is very funny that the most related emotions to "Legislation" and "Economy" is "Disgust", "Sadness" and "Anger" and the most related emotions to "Unity" is "Fear","Anger" and "Disgust". I think this tells me that each new presidents were dissatisfied with the former one's policies and the current situation and they wanted to reform. 
+```{r}
+correlation.line = c(2,3,12:19,27:34)
+correlation.matrix = corpus.list.df[,correlation.line]
+correlation <- as.data.frame(cor(correlation.matrix[c(-1,-2)])[1:8,9:16])
+corr<- rownames(correlation)[head(apply(correlation,2,order,decreasing=TRUE),3)]
+dim(corr) <- c(3,8)
+corr <- as.data.frame(corr) 
+colnames(corr) <- colnames(correlation)
+corr
+```
+
+
+
+
+
